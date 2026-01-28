@@ -58,7 +58,7 @@ min_date = all_df["order_purchase_timestamp"].min()
 max_date = all_df["order_purchase_timestamp"].max()
 
 with st.sidebar:
-    # Menambahkan logo (opsional)
+    # Menambahkan logo
     st.image("https://github.com/dicodingacademy/assets/raw/main/logo.png")
     
     # Date Input
