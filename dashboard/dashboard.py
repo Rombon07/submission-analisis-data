@@ -2,17 +2,17 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 import streamlit as st
+import os
 from babel.numbers import format_currency
 
-# Konfigurasi visualisasi seaborn
+# Set aesthetic style for plots
 sns.set(style='dark')
 
-# --- Helper Functions (Data Aggregation & Transformation) ---
+# --- Helper Functions (Data Aggregation) ---
 
 def create_daily_orders_df(df):
     """
-    Melakukan resampling data time-series ke frekuensi harian ('D').
-    Mengagregasi jumlah order unik (nunique) dan total revenue (sum) per hari.
+    Resample data to daily frequency to calculate total orders and revenue.
     """
     daily_orders_df = df.resample(rule='D', on='order_purchase_timestamp').agg({
         "order_id": "nunique",
@@ -27,16 +27,14 @@ def create_daily_orders_df(df):
 
 def create_sum_order_items_df(df):
     """
-    Mengelompokkan data (Group By) berdasarkan kategori produk.
-    Menghitung total nilai moneter (Revenue) untuk setiap kategori dan mengurutkannya secara descending.
+    Calculate total revenue contribution per product category.
     """
     sum_order_items_df = df.groupby("product_category_name_english").price.sum().sort_values(ascending=False).reset_index()
     return sum_order_items_df
 
 def create_by_city_df(df):
     """
-    Mengagregasi data pelanggan berdasarkan kota (Customer Demographics).
-    Menghitung distribusi jumlah pelanggan unik (unique counts) di setiap kota.
+    Aggregate customer distribution by city.
     """
     by_city_df = df.groupby(by="customer_city").customer_id.nunique().reset_index()
     by_city_df.rename(columns={"customer_id": "customer_count"}, inplace=True)
@@ -44,58 +42,56 @@ def create_by_city_df(df):
 
 def create_rfm_df(df):
     """
-    Menghitung metrik RFM (Recency, Frequency, Monetary) untuk segmentasi pelanggan.
-    - Recency: Menghitung selisih hari (timedelta) antara tanggal analisis dan pembelian terakhir.
-    - Frequency: Menghitung jumlah transaksi unik per pelanggan.
-    - Monetary: Menjumlahkan total nilai transaksi (Revenue) per pelanggan.
+    Compute RFM metrics (Recency, Frequency, Monetary) for customer segmentation.
     """
     rfm_df = df.groupby(by="customer_id", as_index=False).agg({
-        "order_purchase_timestamp": "max", # Mengambil tanggal transaksi terakhir
-        "order_id": "nunique",             # Menghitung frekuensi transaksi
-        "price": "sum"                     # Menghitung total monetary value
+        "order_purchase_timestamp": "max", 
+        "order_id": "nunique", 
+        "price": "sum"
     })
     rfm_df.columns = ["customer_id", "max_order_timestamp", "frequency", "monetary"]
     
-    # Kalkulasi skor Recency
     rfm_df["max_order_timestamp"] = rfm_df["max_order_timestamp"].dt.date
     recent_date = df["order_purchase_timestamp"].dt.date.max()
     rfm_df["recency"] = rfm_df["max_order_timestamp"].apply(lambda x: (recent_date - x).days)
     
     return rfm_df
 
-# --- Load Data & Preprocessing ---
+# --- Data Loading & Preprocessing ---
 
-# Membaca dataset utama dari file CSV
-all_df = pd.read_csv("dashboard/main_data.csv")
+# Define dynamic file path to ensure compatibility across different environments
+script_dir = os.path.dirname(os.path.abspath(__file__))
+file_path = os.path.join(script_dir, 'main_data.csv')
+all_df = pd.read_csv(file_path)
 
-# Handling Missing Values / Schema Mismatch pada kolom kategori
-if "product_category_name_english" not in all_df.columns:
-    if "product_category_name" in all_df.columns:
-        # Rename kolom existing jika translasi tidak tersedia
-        all_df.rename(columns={"product_category_name": "product_category_name_english"}, inplace=True)
-    else:
-        # Imputasi nilai default jika data kategori hilang sepenuhnya
-        all_df["product_category_name_english"] = "Unknown"
+# Standardize column names for product categories (prefer English)
+if "product_category_name_english" in all_df.columns:
+    pass 
+elif "category" in all_df.columns:
+    all_df.rename(columns={"category": "product_category_name_english"}, inplace=True)
+elif "product_category_name" in all_df.columns:
+    all_df.rename(columns={"product_category_name": "product_category_name_english"}, inplace=True)
+else:
+    all_df["product_category_name_english"] = "Unknown"
 
-# Type Casting: Konversi kolom tanggal ke format datetime64[ns]
+# Convert timestamp columns to datetime objects
 datetime_columns = ["order_purchase_timestamp", "order_delivered_customer_date"]
 for column in datetime_columns:
     all_df[column] = pd.to_datetime(all_df[column])
 
-# Sorting data time-series secara kronologis
+# Sort data chronologically
 all_df.sort_values(by="order_purchase_timestamp", inplace=True)
 all_df.reset_index(inplace=True)
 
-# --- Sidebar Configuration & Dynamic Filtering ---
+# --- Sidebar Configuration (Filter) ---
 
 min_date = all_df["order_purchase_timestamp"].min()
 max_date = all_df["order_purchase_timestamp"].max()
 
 with st.sidebar:
-    # Menampilkan Logo Perusahaan
     st.image("https://github.com/dicodingacademy/assets/raw/main/logo.png")
     
-    # Widget Date Input untuk filtering data dinamis
+    # Date Range Filter
     try:
         start_date, end_date = st.date_input(
             label='Rentang Waktu',
@@ -104,26 +100,24 @@ with st.sidebar:
             value=[min_date, max_date]
         )
     except ValueError:
-        st.error("Input tanggal tidak valid, menggunakan rentang default.")
+        st.error("Invalid date range selected.")
         start_date, end_date = min_date, max_date
 
-# Filtering DataFrame utama berdasarkan rentang waktu yang dipilih user
+# Apply filter to main dataframe
 main_df = all_df[(all_df["order_purchase_timestamp"] >= str(start_date)) & 
-                 (all_df["order_purchase_timestamp"] <= str(end_date))]
+                (all_df["order_purchase_timestamp"] <= str(end_date))]
 
-# --- Data Processing for Visualization ---
-
-# Menjalankan fungsi helper untuk membuat DataFrame spesifik visualisasi
+# --- Data Visualization Preparation ---
 daily_orders_df = create_daily_orders_df(main_df)
 sum_order_items_df = create_sum_order_items_df(main_df)
 by_city_df = create_by_city_df(main_df)
 rfm_df = create_rfm_df(main_df)
 
-# --- Dashboard Layout & Visualization ---
+# --- Dashboard Layout ---
 
 st.header('Dicoding E-Commerce Dashboard :sparkles:')
 
-# 1. Metric Visualization: Daily Orders & Revenue
+# 1. Sales Trend Section
 st.subheader('Daily Orders & Revenue')
 col1, col2 = st.columns(2)
 
@@ -135,7 +129,6 @@ with col2:
     total_revenue = format_currency(daily_orders_df.revenue.sum(), "AUD", locale='es_CO') 
     st.metric("Total Revenue", value=total_revenue)
 
-# Plotting Line Chart untuk Tren Penjualan
 fig, ax = plt.subplots(figsize=(16, 8))
 ax.plot(
     daily_orders_df["order_purchase_timestamp"],
@@ -148,21 +141,19 @@ ax.tick_params(axis='y', labelsize=20)
 ax.tick_params(axis='x', labelsize=15)
 st.pyplot(fig)
 
-# 2. Bar Chart: Product Performance (By Revenue)
+# 2. Product Performance Section
 st.subheader("Best & Worst Performing Product (By Revenue)")
-st.markdown("*Pertanyaan: Produk apa yang menyumbang pendapatan terbesar dan terendah?*")
-
 fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(24, 6))
 colors = ["#72BCD4", "#D3D3D3", "#D3D3D3", "#D3D3D3", "#D3D3D3"]
 
-# Subplot 1: Best Performing Products
+# Top 5 Products
 sns.barplot(x="price", y="product_category_name_english", data=sum_order_items_df.head(5), palette=colors, ax=ax[0])
 ax[0].set_ylabel(None)
 ax[0].set_xlabel("Total Revenue", fontsize=20)
 ax[0].set_title("Best Performing Product", loc="center", fontsize=18)
 ax[0].tick_params(axis='y', labelsize=15)
 
-# Subplot 2: Worst Performing Products
+# Bottom 5 Products
 sns.barplot(x="price", y="product_category_name_english", data=sum_order_items_df.sort_values(by="price", ascending=True).head(5), palette=colors, ax=ax[1])
 ax[1].set_ylabel(None)
 ax[1].set_xlabel("Total Revenue", fontsize=20)
@@ -174,7 +165,7 @@ ax[1].tick_params(axis='y', labelsize=15)
 
 st.pyplot(fig)
 
-# 3. Bar Chart: Customer Demographics
+# 3. Customer Demographics Section
 st.subheader("Customer Demographics")
 fig, ax = plt.subplots(figsize=(20, 10))
 colors_demog = ["#90CAF9", "#D3D3D3", "#D3D3D3", "#D3D3D3", "#D3D3D3", "#D3D3D3", "#D3D3D3", "#D3D3D3"]
@@ -192,9 +183,8 @@ ax.tick_params(axis='y', labelsize=20)
 ax.tick_params(axis='x', labelsize=20)
 st.pyplot(fig)
 
-# 4. Bar Chart: RFM Analysis Visualization
+# 4. RFM Analysis Section
 st.subheader("Best Customer Based on RFM Parameters")
-
 col1, col2, col3 = st.columns(3)
 
 with col1:
@@ -212,38 +202,73 @@ with col3:
 fig, ax = plt.subplots(nrows=1, ncols=3, figsize=(35, 15))
 colors_rfm = ["#72BCD4", "#D3D3D3", "#D3D3D3", "#D3D3D3", "#D3D3D3"]
 
-# Visualisasi Recency
-temp_df_r = rfm_df.sort_values(by="recency", ascending=True).head(5)
-sns.barplot(x="customer_id", y="recency", data=temp_df_r, palette=colors_rfm, hue="customer_id", legend=False, ax=ax[0])
+# Recency Plot
+sns.barplot(x="customer_id", y="recency", data=rfm_df.sort_values(by="recency", ascending=True).head(5), palette=colors_rfm, hue="customer_id", legend=False, ax=ax[0])
 ax[0].set_ylabel(None)
 ax[0].set_xlabel("Customer ID", fontsize=30)
-ax[0].set_title("By Recency (Days)\n(Lower is Better)", loc="center", fontsize=40)
+ax[0].set_title("By Recency (Days)", loc="center", fontsize=40)
 ax[0].tick_params(axis='x', labelsize=20, rotation=90)
 ax[0].tick_params(axis='y', labelsize=30)
 
-# Visualisasi Frequency
-temp_df_f = rfm_df.sort_values(by="frequency", ascending=False).head(5)
-sns.barplot(x="customer_id", y="frequency", data=temp_df_f, palette=colors_rfm, hue="customer_id", legend=False, ax=ax[1])
+# Frequency Plot
+sns.barplot(x="customer_id", y="frequency", data=rfm_df.sort_values(by="frequency", ascending=False).head(5), palette=colors_rfm, hue="customer_id", legend=False, ax=ax[1])
 ax[1].set_ylabel(None)
 ax[1].set_xlabel("Customer ID", fontsize=30)
 ax[1].set_title("By Frequency", loc="center", fontsize=40)
 ax[1].tick_params(axis='x', labelsize=20, rotation=90)
 ax[1].tick_params(axis='y', labelsize=30)
 
-# Visualisasi Monetary
-temp_df_m = rfm_df.sort_values(by="monetary", ascending=False).head(5)
-sns.barplot(x="customer_id", y="monetary", data=temp_df_m, palette=colors_rfm, hue="customer_id", legend=False, ax=ax[2])
+# Monetary Plot
+sns.barplot(x="customer_id", y="monetary", data=rfm_df.sort_values(by="monetary", ascending=False).head(5), palette=colors_rfm, hue="customer_id", legend=False, ax=ax[2])
 ax[2].set_ylabel(None)
 ax[2].set_xlabel("Customer ID", fontsize=30)
 ax[2].set_title("By Monetary", loc="center", fontsize=40)
 ax[2].tick_params(axis='x', labelsize=20, rotation=90)
 ax[2].tick_params(axis='y', labelsize=30)
 
-# Menghilangkan spines (batas chart) untuk estetika
+# Clean up chart aesthetics
 for a in ax:
     for spine in ['top', 'right']:
         a.spines[spine].set_visible(False)
 
 st.pyplot(fig)
 
-st.caption('Copyright (c) Dicoding 2023')
+# --- Strategic Insights Section ---
+st.markdown("---")
+st.subheader("📋 Conclusion & Recommendations")
+
+tab1, tab2, tab3 = st.tabs(["💡 Product Strategy", "📈 Sales Trend", "🤝 Customer Retention"])
+
+with tab1:
+    st.markdown("""
+    **Kesimpulan Produk:**
+    * **Bed Bath Table** & **Health Beauty** adalah kategori produk dengan performa pendapatan tertinggi.
+    * **Security and Services** memiliki performa terendah, memerlukan evaluasi strategis.
+    
+    **Rekomendasi:**
+    * Jaga ketersediaan stok (*Safety Stock*) pada kategori *Best Seller*.
+    * Pertimbangkan strategi *bundling* atau promosi untuk kategori dengan performa rendah.
+    """)
+
+with tab2:
+    st.markdown("""
+    **Analisis Tren:**
+    * Tren pendapatan perusahaan menunjukkan pola **Positif (Meningkat)**.
+    * Terdapat lonjakan signifikan di bulan **November 2017** (indikasi efek musiman/akhir tahun).
+    
+    **Rekomendasi:**
+    * Fokuskan anggaran pemasaran terbesar pada Q4 (Oktober-November) untuk memanfaatkan momentum puncak.
+    * Siapkan promosi tematik di awal tahun untuk menjaga stabilitas penjualan.
+    """)
+
+with tab3:
+    st.markdown("""
+    **Analisis RFM:**
+    * **Recency:** Mayoritas pelanggan sudah lama tidak bertransaksi.
+    * **Frequency:** Sebagian besar pelanggan hanya berbelanja satu kali (*Low Retention*).
+    * **Monetary:** Terdapat segmen VIP yang berkontribusi signifikan terhadap revenue.
+    
+    **Rekomendasi:**
+    * Luncurkan **Loyalty Program** untuk meningkatkan retensi pelanggan.
+    * Berikan penawaran eksklusif bagi pelanggan VIP untuk mempertahankan loyalitas mereka.
+    """)
